@@ -1,5 +1,5 @@
 {
     "name": "Reset Staging Workflow",
     "description": "Resets the staging branch to master on a schedule",
-    "iconName": "octicon git-merge"
+    "iconName": "reset-staging"
 }
