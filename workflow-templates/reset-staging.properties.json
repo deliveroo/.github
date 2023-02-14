@@ -1,5 +1,5 @@
 {
-    "name": "Reset Staging Workflow",
-    "description": "Resets the staging branch to master on a schedule",
+    "name": "Auto-Reset Staging Branch",
+    "description": "Periodically (i.e. weekly) auto-reset the staging branch in your repo to match the master branch.",
     "iconName": "reset-staging"
 }
