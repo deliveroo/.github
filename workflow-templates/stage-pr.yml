@@ -1,0 +1,35 @@
+name: Stage your PR
+on:
+  pull_request:
+    types: [labeled]
+
+env:
+  PR_BRANCH: ${{ github.head_ref }}
+
+jobs:
+  merge-to-staging:
+    if: ${{ github.event.label.name == 'stage' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: git checkout
+        uses: actions/checkout@v3
+        with:
+          ref: staging
+          fetch-depth: 0
+
+      - name: perform merge
+        run: |
+          git config --local user.email stage-pr-action
+          git config --local user.name stage-pr-action
+          git checkout ${PR_BRANCH}
+          git pull
+          git checkout staging
+          git reset --hard origin/staging
+          git merge ${PR_BRANCH} --no-edit
+          git push origin staging
+
+      - name: remove label
+        if: always()
+        uses: actions-ecosystem/action-remove-labels@v1
+        with:
+          labels: stage
