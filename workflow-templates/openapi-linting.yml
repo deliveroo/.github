@@ -1,0 +1,26 @@
+name: "Validate Renovate configuration"
+on:
+  push:
+    paths:
+      - .github/workflows/renovate-config-validator.yml
+      # TODO: update me according to how your repo is set up
+      - docs/openapi.yml
+      - openapi.yml
+      - openapi.yaml
+      - swagger.yml
+  pull_request:
+    paths:
+      - .github/workflows/renovate-config-validator.yml
+      # TODO: update me according to how your repo is set up
+      - docs/openapi.yml
+      - openapi.yml
+      - openapi.yaml
+      - swagger.yml
+permissions:
+  contents: read
+jobs:
+  validate-config:
+    uses: deliveroo/api-linting-tooling/.github/workflows/reusable-openapi-linting.yml@main
+    with:
+      # TODO: update me according to how your repo is set up
+      globs: ./docs/openapi.yml
