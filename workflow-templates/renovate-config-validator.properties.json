@@ -1,0 +1,4 @@
+{
+  "name": "Renovate Configuration Validator",
+  "description": "Ensure that your Renovate configuration is valid according to our internal configuration"
+}
