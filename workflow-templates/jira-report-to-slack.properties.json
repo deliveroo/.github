@@ -1,0 +1,4 @@
+{
+  "name": "Jira Report to Slack",
+  "description": "Posts a scheduled Jira report to Slack using JQL, Jira API, and a Slack incoming webhook."
+}
