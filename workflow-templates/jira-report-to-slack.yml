@@ -1,0 +1,178 @@
+name: "Post Jira report to Slack"
+on:
+  # Every weekday at 09:00 UTC
+  schedule:
+    - cron: "0 9 * * 1-5"
+  # Allow workflow to be manually triggered with custom query values
+  workflow_dispatch:
+    inputs:
+      jql:
+        description: "JQL used to build the Jira report"
+        required: false
+        type: string
+      max_results:
+        description: "Maximum number of Jira issues to include"
+        required: false
+        default: "25"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  post-report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build Jira report and send to Slack
+        env:
+          # Required secrets/variables:
+          # - vars.JIRA_BASE_URL (for example, https://your-domain.atlassian.net)
+          # - secrets.JIRA_USER_EMAIL
+          # - secrets.JIRA_API_TOKEN
+          # - secrets.SLACK_WEBHOOK_URL
+          # - vars.JIRA_REPORT_JQL (unless you pass the jql workflow input)
+          JIRA_BASE_URL: ${{ vars.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          REPORT_JQL: ${{ github.event.inputs.jql || vars.JIRA_REPORT_JQL }}
+          REPORT_MAX_RESULTS: ${{ github.event.inputs.max_results || vars.JIRA_REPORT_MAX_RESULTS || '25' }}
+        run: |
+          python - <<'PY'
+          import base64
+          import datetime
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+
+          def fail(message: str) -> None:
+              print(message, file=sys.stderr)
+              sys.exit(1)
+
+
+          def require(name: str) -> str:
+              value = os.getenv(name, "").strip()
+              if not value:
+                  fail(f"Missing required environment variable: {name}")
+              return value
+
+
+          def escape_slack(text: str) -> str:
+              return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+          jira_base_url = require("JIRA_BASE_URL").rstrip("/")
+          jira_user_email = require("JIRA_USER_EMAIL")
+          jira_api_token = require("JIRA_API_TOKEN")
+          slack_webhook_url = require("SLACK_WEBHOOK_URL")
+          jql = os.getenv("REPORT_JQL", "").strip()
+          if not jql:
+              fail("No JQL configured. Set vars.JIRA_REPORT_JQL or pass workflow_dispatch input 'jql'.")
+
+          try:
+              max_results = int(os.getenv("REPORT_MAX_RESULTS", "25"))
+          except ValueError:
+              fail("REPORT_MAX_RESULTS must be a valid integer.")
+          max_results = min(100, max(1, max_results))
+
+          jira_payload = json.dumps(
+              {
+                  "jql": jql,
+                  "maxResults": max_results,
+                  "fields": ["summary", "status", "assignee", "priority", "updated"],
+              }
+          ).encode("utf-8")
+          jira_request = urllib.request.Request(
+              url=f"{jira_base_url}/rest/api/3/search",
+              data=jira_payload,
+              method="POST",
+              headers={
+                  "Authorization": "Basic "
+                  + base64.b64encode(f"{jira_user_email}:{jira_api_token}".encode("utf-8")).decode("utf-8"),
+                  "Accept": "application/json",
+                  "Content-Type": "application/json",
+              },
+          )
+
+          try:
+              with urllib.request.urlopen(jira_request) as jira_response:
+                  jira_result = json.load(jira_response)
+          except urllib.error.HTTPError as error:
+              response_body = error.read().decode("utf-8", errors="replace")
+              fail(f"Jira API request failed ({error.code}): {response_body}")
+
+          issues = jira_result.get("issues", [])
+          total_issues = jira_result.get("total", len(issues))
+          report_timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+          lines = []
+          for issue in issues:
+              issue_key = issue.get("key", "UNKNOWN")
+              issue_fields = issue.get("fields", {})
+
+              summary = (issue_fields.get("summary") or "No summary").replace("\n", " ").strip()
+              if len(summary) > 90:
+                  summary = summary[:87] + "..."
+
+              status = ((issue_fields.get("status") or {}).get("name")) or "Unknown"
+              assignee = ((issue_fields.get("assignee") or {}).get("displayName")) or "Unassigned"
+              priority = ((issue_fields.get("priority") or {}).get("name")) or "No priority"
+              updated_date = (issue_fields.get("updated") or "")[:10] or "n/a"
+              issue_url = f"{jira_base_url}/browse/{issue_key}"
+
+              lines.append(
+                  f"• <{issue_url}|{escape_slack(issue_key)}> - *{escape_slack(summary)}* "
+                  f"(status: {escape_slack(status)}, assignee: {escape_slack(assignee)}, "
+                  f"priority: {escape_slack(priority)}, updated: {escape_slack(updated_date)})"
+              )
+
+          jql_for_message = escape_slack(jql.replace("`", "'"))
+          if lines:
+              slack_message_lines = [
+                  f"*Jira report* ({len(issues)} shown of {total_issues})",
+                  f"_Generated {report_timestamp}_",
+                  f"`JQL: {jql_for_message}`",
+                  "",
+                  *lines,
+              ]
+              if total_issues > len(issues):
+                  slack_message_lines.extend(
+                      ["", f"_Showing first {len(issues)} issues. Increase max_results to include more._"]
+                  )
+          else:
+              slack_message_lines = [
+                  "*Jira report*",
+                  f"_Generated {report_timestamp}_",
+                  f"`JQL: {jql_for_message}`",
+                  "",
+                  "No issues matched this query. :white_check_mark:",
+              ]
+
+          slack_payload = json.dumps(
+              {
+                  "text": "\n".join(slack_message_lines),
+                  "mrkdwn": True,
+                  "unfurl_links": False,
+                  "unfurl_media": False,
+              }
+          ).encode("utf-8")
+
+          slack_request = urllib.request.Request(
+              url=slack_webhook_url,
+              data=slack_payload,
+              method="POST",
+              headers={"Content-Type": "application/json; charset=utf-8"},
+          )
+
+          try:
+              with urllib.request.urlopen(slack_request) as slack_response:
+                  response_text = slack_response.read().decode("utf-8", errors="replace")
+          except urllib.error.HTTPError as error:
+              response_body = error.read().decode("utf-8", errors="replace")
+              fail(f"Slack webhook request failed ({error.code}): {response_body}")
+
+          print(f"Slack webhook response: {response_text}")
+          PY
